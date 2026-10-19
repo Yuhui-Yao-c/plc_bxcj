@@ -78,25 +78,33 @@ def load_config(project_dir: Path) -> dict:
 
 
 def decode_sources(project_dir: Path, config: dict) -> list:
-    """Decode all source files."""
-    source_format = config.get('source_decoder', detect_format(project_dir))
+    """Decode actual supplied source files; fail on missing/empty inputs.
 
-    if source_format == 'smc2' or source_format == 'SMC2Decoder':
+    SMC2 export files usually use a .smc2 extension, even though the
+    serialized contents are XML. A zero-program decode is not a valid
+    empty PLC project.
+    """
+    source_format = config.get('source_decoder', detect_format(project_dir))
+    source_dir = project_dir / 'source'
+    if source_format in ('smc2', 'SMC2Decoder'):
         decoder = SMC2Decoder()
-        source_dir = project_dir / 'source'
-        xml_files = sorted(source_dir.glob('*.xml'))
-        programs = [decoder.decode(str(f)) for f in xml_files]
-    else:
+        source_files = sorted(set(source_dir.glob('*.smc2')) | set(source_dir.glob('*.xml')))
+    elif source_format in ('plcopen', 'plcopen_xml', 'PLCopenDecoder'):
         decoder = PLCopenDecoder()
         split_dir = config.get('split_dir', 'MySplitProject/Actions')
         actions_dir = project_dir / split_dir
         if actions_dir.exists() and any(actions_dir.glob('*.xml')):
-            xml_files = sorted(actions_dir.glob('*.xml'))
+            source_files = sorted(actions_dir.glob('*.xml'))
         else:
-            source_dir = project_dir / 'source'
-            xml_files = sorted(source_dir.glob('*.xml'))
-        programs = [decoder.decode(str(f)) for f in xml_files]
-
+            source_files = sorted(source_dir.glob('*.xml'))
+    else:
+        raise ValueError(f'Unsupported source_decoder: {source_format!r}')
+    if not source_files:
+        raise FileNotFoundError(f'No {source_format} source files found under {source_dir}')
+    programs = [decoder.decode(str(f)) for f in source_files]
+    empty = [str(f) for f, dp in zip(source_files, programs) if not dp.program_units]
+    if empty:
+        raise ValueError(f'Decoder returned no program units for: {empty}')
     return programs
 
 
