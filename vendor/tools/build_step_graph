@@ -28,6 +28,11 @@ from lib.step_logic_slicer import StepLogicSlicer, find_step_anchors
 from lib.step_graph import steps_raw_to_step_graph, StepGraph
 from lib.boolean_expr import bool_expr_to_string
 from lib.primitives_canonical import discover_steps_from_canonical, extract_step_logic_from_canonical
+from lib.step_fact_projection import (
+    step_key, slice_to_step_raw as project_slice,
+    choose_primary_slice, occurrence_reference,
+    boolean_to_string,
+)
 
 
 def detect_format(project_dir: Path) -> str:
@@ -101,281 +106,98 @@ def decode_sources(project_dir: Path, config: dict) -> list:
 
 
 def slices_to_steps_raw(slices: list) -> list:
-    """Convert StepLogicSlice list to steps_raw.json format."""
-    steps_raw = []
-    for s in slices:
-        # Extract guard variable names
-        guards = []
-        for g in s.guards:
-            label = ('NOT ' + g.variable) if g.negated else g.variable
-            if label and label not in guards:
-                guards.append(label)
-
-        # Extract common enables
-        common_enables = []
-        for ce in s.common_enables:
-            label = ('NOT ' + ce.variable) if ce.negated else ce.variable
-            if label and label not in common_enables:
-                common_enables.append(label)
-
-        # Extract actions
-        actions = []
-        for a in s.actions:
-            if a.variable and a.variable not in actions:
-                actions.append(a.variable)
-
-        # Extract calls
-        calls = [{'name': c.callee} for c in s.calls]
-
-        # Extract timers
-        timers = [{'name': t.timer_type, 'pt': t.preset} for t in s.timers]
-
-        # Extract transitions with boolean_expr
-        transitions = []
-        for t in s.transitions:
-            ts = t.target_step or {}
-            transition = {
-                'target_thread': ts.get('thread', -1),
-                'target_value': ts.get('value', 0),
-                'source': 'topology_slice',
-            }
-            # Add condition from boolean_expr
-            if t.boolean_expr:
-                condition_str = _bool_dict_to_string(t.boolean_expr)
-                if condition_str:
-                    transition['condition'] = condition_str
-            # Propagate provenance from evidence path
-            prov = 'topology_only'
-            for step in (t.evidence_path or []):
-                if 'variable_flow' in step.get('edge_type', ''):
-                    status = step.get('resolution_status', 'ambiguous')
-                    if status == 'ambiguous':
-                        prov = 'ambiguous'
-                        break
-                    elif prov == 'topology_only':
-                        prov = 'validated_dataflow'
-            if prov != 'topology_only':
-                transition['provenance'] = prov
-            transitions.append(transition)
-
-        step = {
-            'state_variable': s.step_identity.get('state_variable', ''),
-            'station': s.step_identity.get('station', ''),
-            'thread_idx': s.step_identity.get('thread_idx', 0),
-            'step_value': s.step_identity.get('step_value', 0),
-            'comment': s.comment or '',
-            'actions': actions,
-            'guards': guards,
-            'common_enables': common_enables,
-            'transitions': transitions,
-            'timers': timers,
-            'calls': calls,
-            'st_code': [],
-            'source_file': s.source_file,
-            'source_type': 'topology_slice',
-            'logic_resolution_status': 'fully_resolved',
-            'evidence': {
-                'anchor_id': s.anchor_element_id,
-                'network_id': s.anchor_network_id,
-                'unit_name': s.anchor_unit_name,
-            },
-        }
-        steps_raw.append(step)
-
-    return steps_raw
-
+    """Preserve full PLC fact records in the StepGraph input projection."""
+    return [project_slice(s) for s in slices]
 
 def merge_step_universe_with_slices(step_candidates: list, base_logic: list,
-                                     slices: list) -> list:
-    """Merge complete Step Universe with sliced logic.
+                                    slices: list) -> list:
+    """Build the complete Step Universe without overwriting duplicate anchors.
 
-    Ensures ALL discovered steps appear as StepGraph nodes, even if they
-    have no EQ anchor (st_code, comment_only steps).
-
-    Logic resolution status:
-      - fully_resolved: EQ-anchored, slicer produced guards/actions/transitions
-      - partially_resolved: EQ-anchored but slicer found partial logic
-      - no_eq_anchor: st_code or comment_only step, no topology slicing
+    Each logical Step may occur in multiple networks. Only one slice is chosen
+    for *legacy flat fields*, and the selection is explicitly unverified if
+    multiple occurrences exist. ALL other slice evidence is retained for
+    subsequent ownership analysis; it is never silently merged into actions.
     """
-    # Build slice lookup by step identity
-    slice_map = {}
+    slice_map = defaultdict(list)
     for s in slices:
-        key = (
-            s.step_identity.get('state_variable', ''),
-            s.step_identity.get('station', ''),
-            s.step_identity.get('thread_idx', 0),
-            s.step_identity.get('step_value', 0),
-        )
-        slice_map[key] = s
+        slice_map[step_key(s)].append(s)
 
-    # Build base_logic lookup
-    logic_map = {}
-    for l in base_logic:
-        key = (
-            l.get('state_variable', ''),
-            l.get('station', ''),
-            l.get('thread_idx', 0),
-            l.get('step_value', l.get('value', 0)),
-        )
-        logic_map[key] = l
+    base_map = defaultdict(list)
+    for row in base_logic:
+        base_map[step_key(row)].append(row)
 
-    # Build step_candidates lookup (deduplicated)
-    seen_keys = set()
-    merged = []
-
+    candidate_map = defaultdict(list)
+    ordered_keys = []
     for cand in step_candidates:
-        key = (
-            cand.get('state_variable', ''),
-            cand.get('station', ''),
-            cand.get('thread_idx', 0),
-            cand.get('value', cand.get('step_value', 0)),
-        )
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
+        key = step_key(cand)
+        if key not in candidate_map:
+            ordered_keys.append(key)
+        candidate_map[key].append(cand)
 
-        source_type = cand.get('source_type', 'unknown')
-        slc = slice_map.get(key)
-        base = logic_map.get(key)
+    merged = []
+    for key in ordered_keys:
+        candidates = candidate_map[key]
+        cand = candidates[0]
+        matching_slices = slice_map.get(key, [])
+        matching_base = base_map.get(key, [])
 
-        if slc is not None:
-            # Use slicer results (richest)
-            step = _slice_to_step_raw(slc)
-            # Determine resolution status
-            has_guards = bool(slc.guards)
-            has_actions = bool(slc.actions)
-            has_transitions = bool(slc.transitions)
-            if has_guards and has_actions and has_transitions:
-                step['logic_resolution_status'] = 'fully_resolved'
-            elif has_guards or has_actions or has_transitions:
-                step['logic_resolution_status'] = 'partially_resolved'
+        if matching_slices:
+            primary, selection = choose_primary_slice(matching_slices)
+            step = project_slice(primary)
+            facts = list(primary.guards) + list(primary.actions) + list(primary.transitions)
+            has_full_shape = bool(primary.guards and primary.actions and primary.transitions)
+            has_unresolved = bool(primary.unresolved_logic or primary.unresolved_upstream)
+            has_ambiguous = any(getattr(f, "provenance", "") == "ambiguous" for f in facts)
+            if has_full_shape and not has_unresolved and not has_ambiguous and len(matching_slices) == 1:
+                step["logic_resolution_status"] = "fully_resolved"
             else:
-                step['logic_resolution_status'] = 'partially_resolved'
-            merged.append(step)
-        elif base is not None:
-            # Use base logic (from extract_step_logic_from_canonical)
-            step = dict(base)
-            step['logic_resolution_status'] = 'no_eq_anchor'
-            step['source_type'] = source_type
-            merged.append(step)
-        else:
-            # Minimal step — only discovery evidence
-            step = {
-                'state_variable': cand.get('state_variable', ''),
-                'station': cand.get('station', ''),
-                'thread_idx': cand.get('thread_idx', 0),
-                'step_value': cand.get('value', cand.get('step_value', 0)),
-                'comment': '',
-                'actions': [],
-                'guards': [],
-                'common_enables': [],
-                'transitions': [],
-                'timers': [],
-                'calls': [],
-                'st_code': [],
-                'source_file': cand.get('source_file', ''),
-                'source_type': source_type,
-                'logic_resolution_status': 'no_eq_anchor',
-                'evidence': cand.get('evidence', {}),
-            }
-            merged.append(step)
+                step["logic_resolution_status"] = "partially_resolved"
 
+            step["slice_occurrences"] = [occurrence_reference(s) for s in matching_slices]
+            step["primary_selection"] = selection
+            step["unselected_slice_facts"] = [
+                s.to_dict() if callable(getattr(s, "to_dict", None)) else occurrence_reference(s)
+                for s in matching_slices if s is not primary
+            ]
+            if len(matching_slices) > 1:
+                step.setdefault("review_reason_codes", []).append("multiple_step_occurrences_owner_unverified")
+        elif matching_base:
+            step = dict(matching_base[0])
+            step["logic_resolution_status"] = "no_eq_anchor"
+            step["source_type"] = cand.get("source_type", "unknown")
+            step["base_logic_occurrences"] = list(matching_base)
+            if len(matching_base) > 1:
+                step.setdefault("review_reason_codes", []).append("multiple_base_logic_occurrences")
+        else:
+            step = {
+                "state_variable": cand.get("state_variable", ""),
+                "station": cand.get("station", ""),
+                "thread_idx": cand.get("thread_idx", 0),
+                "step_value": cand.get("value", cand.get("step_value", 0)),
+                "comment": "",
+                "actions": [], "guards": [], "common_enables": [],
+                "transitions": [], "timers": [], "calls": [], "st_code": [],
+                "source_file": cand.get("source_file", ""),
+                "source_type": cand.get("source_type", "unknown"),
+                "logic_resolution_status": "no_eq_anchor",
+                "evidence": cand.get("evidence", {}),
+            }
+
+        step["candidate_occurrences"] = candidates
+        step["step_identity"] = {
+            "state_variable": key[0], "station": key[1],
+            "thread_idx": key[2], "step_value": key[3],
+        }
+        merged.append(step)
     return merged
 
-
 def _slice_to_step_raw(s) -> dict:
-    """Convert a single StepLogicSlice to step_raw dict."""
-    guards = []
-    for g in s.guards:
-        label = ('NOT ' + g.variable) if g.negated else g.variable
-        if label and label not in guards:
-            guards.append(label)
-
-    common_enables = []
-    for ce in s.common_enables:
-        label = ('NOT ' + ce.variable) if ce.negated else ce.variable
-        if label and label not in common_enables:
-            common_enables.append(label)
-
-    actions = []
-    for a in s.actions:
-        if a.variable and a.variable not in actions:
-            actions.append(a.variable)
-
-    calls = [{'name': c.callee} for c in s.calls]
-    timers = [{'name': t.timer_type, 'pt': t.preset} for t in s.timers]
-
-    transitions = []
-    for t in s.transitions:
-        ts = t.target_step or {}
-        transition = {
-            'target_thread': ts.get('thread', -1),
-            'target_value': ts.get('value', 0),
-            'source': 'topology_slice',
-        }
-        if t.boolean_expr:
-            condition_str = _bool_dict_to_string(t.boolean_expr)
-            if condition_str:
-                transition['condition'] = condition_str
-        # Propagate provenance (weakest-link)
-        if hasattr(t, 'provenance') and t.provenance in ('ambiguous', 'validated_dataflow'):
-            transition['provenance'] = t.provenance
-        transitions.append(transition)
-
-    return {
-        'state_variable': s.step_identity.get('state_variable', ''),
-        'station': s.step_identity.get('station', ''),
-        'thread_idx': s.step_identity.get('thread_idx', 0),
-        'step_value': s.step_identity.get('step_value', 0),
-        'comment': s.comment or '',
-        'actions': actions,
-        'guards': guards,
-        'common_enables': common_enables,
-        'transitions': transitions,
-        'timers': timers,
-        'calls': calls,
-        'st_code': [],
-        'source_file': s.source_file,
-        'source_type': 'topology_slice',
-        'logic_resolution_status': 'fully_resolved',
-        'evidence': {
-            'anchor_id': s.anchor_element_id,
-            'network_id': s.anchor_network_id,
-            'unit_name': s.anchor_unit_name,
-        },
-    }
-
+    """Compatibility entrypoint for callers expecting the legacy name."""
+    return project_slice(s)
 
 def _bool_dict_to_string(d: dict) -> str:
-    """Convert boolean_expr dict to string."""
-    if not d:
-        return ''
-    etype = d.get('expr_type', '')
-    if etype == 'atom':
-        if d.get('comparison'):
-            comp = d['comparison']
-            ops = comp.get('operands', [])
-            op = comp.get('operator', '')
-            neg = 'NOT ' if d.get('negated') else ''
-            return f'{neg}{op}({", ".join(str(o) for o in ops)})'
-        var = d.get('variable', '')
-        neg = 'NOT ' if d.get('negated') else ''
-        return f'{neg}{var}' if var else ''
-    elif etype == 'not':
-        inner = _bool_dict_to_string(d.get('operand', {}))
-        return f'NOT ({inner})' if inner else ''
-    elif etype == 'and':
-        parts = [_bool_dict_to_string(c) for c in d.get('children', [])]
-        parts = [p for p in parts if p]
-        return ' AND '.join(parts) if parts else ''
-    elif etype == 'or':
-        parts = [_bool_dict_to_string(c) for c in d.get('children', [])]
-        parts = [p for p in parts if p]
-        return ' OR '.join(parts) if parts else ''
-    elif etype == 'unknown':
-        return ''
-    return ''
-
+    """Render an AST with explicit precedence instead of dropping parentheses."""
+    return boolean_to_string(d)
 
 def report_statistics(steps_raw: list, graph: StepGraph, config: dict,
                       slices: list = None):
