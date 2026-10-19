@@ -570,7 +570,9 @@ class StepLogicSlicer:
         for path_ids in paths:
             atoms = self._extract_guard_atoms(path_ids, elem_by_id)
             if not atoms:
-                continue
+                # An unguarded or undecodable route must not disappear from
+                # OR(A, route). Dropping it silently changes Boolean semantics.
+                return BoolUnknown(reason='unguarded_or_unresolved_topology_path')
             expr = self._atoms_to_bool(atoms)
             if expr is not None:
                 path_exprs.append(expr)
