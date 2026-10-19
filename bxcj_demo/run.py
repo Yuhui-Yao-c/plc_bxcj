@@ -669,6 +669,16 @@ def stage_comparison(workdir: Path, output_dir: Path, cfg: dict) -> bool:
 
 # ============== 主流程 ==============
 
+def stage_generate_interface_spec(workdir: Path, cfg: dict) -> bool:
+    """Generate project interface hints only after source slices exist."""
+    spec = cfg.get('interface_spec')
+    if not spec or not spec.get('auto_generate'):
+        return True
+    log('  从真实StepLogicSlices提取Mylar interface_spec')
+    from dlib.mylar_interface_analyzer import MylarInterfaceAnalyzer
+    return MylarInterfaceAnalyzer(workdir / 'output', cfg).run()
+
+
 def run_project(config_path: str, fresh: bool = False) -> bool:
     log(f'==== 加载配置: {config_path} ====')
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -699,23 +709,16 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
     # 2. extract_config
     write_extract_config(workdir, workdir / 'output', cfg)
 
-    # 3. Mylar interface_spec 自动生成（如需要）
+    # 3. The interface spec depends on StepLogicSlices. Never execute it
+    # before decoding/build_step_graph in a clean workspace.
     ispec = cfg.get('interface_spec')
-    if ispec and ispec.get('auto_generate'):
-        log('--- Mylar interface_spec 自动生成 ---')
-        from dlib.mylar_interface_analyzer import MylarInterfaceAnalyzer
-        analyzer = MylarInterfaceAnalyzer(workdir / 'output', cfg)
-        if not analyzer.run():
-            log('  interface_spec 生成失败', 'ERROR')
-            return False
-
-    # 4. 重跑 event_graph（interface_spec 改变时）
     force_eg = bool(ispec and ispec.get('auto_generate'))
 
-    # 5. 主 pipeline
+    # 4. 主 pipeline
     stages = [
         ('build_evidence', lambda: stage_build_evidence(workdir, cfg, fresh)),
         ('build_step_graph', lambda: stage_build_step_graph(workdir, cfg, fresh)),
+        ('generate_interface_spec', lambda: stage_generate_interface_spec(workdir, cfg)),
         ('build_event_graph', lambda: stage_build_event_graph(workdir, cfg, fresh, force_rerun=force_eg)),
         ('describe_steps', lambda: stage_describe_steps(workdir, cfg, fresh)),
         ('timing_boundary', lambda: stage_timing_boundary(workdir, cfg, fresh)),
@@ -738,7 +741,7 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
         # 决定是否执行此阶段
         core_stages = ('build_evidence', 'build_step_graph',
                        'build_event_graph', 'describe_steps', 'timing_boundary')
-        always_stages = ('end_tag_selector', 'transition_filter',
+        always_stages = ('generate_interface_spec', 'end_tag_selector', 'transition_filter',
                          'trace_pipeline', 'demo_exporter', 'comparison',
                          'smc2_fb_recognizer', 'ultrasound_interface_analyzer',
                          'build_process_model', 'build_action_span',
