@@ -124,22 +124,22 @@ class WeintekCsvTraceReader:
         self.format = 'weintek_csv'
 
     def _parse_clock_time(self, date_str: str, clock_str: str) -> float:
-        """将 '2026-09-04' + '14:12:07.49' 转为秒级时间戳。"""
+        """将 '2026-09-04' + '14:12:07.49' 转为毫秒时间戳，与TraceSignalData契约一致。"""
         import datetime
         try:
             # 合并日期和时间
             dt = datetime.datetime.strptime(
                 f'{date_str} {clock_str}', '%Y-%m-%d %H:%M:%S.%f'
             )
-            return dt.timestamp()
+            return dt.timestamp() * 1000.0
         except ValueError:
             try:
                 dt = datetime.datetime.strptime(
                     f'{date_str} {clock_str}', '%Y-%m-%d %H:%M:%S'
                 )
-                return dt.timestamp()
+                return dt.timestamp() * 1000.0
             except ValueError:
-                return 0.0
+                return None
 
     def read(self) -> list[TraceSignalData]:
         return self._read_single(self.trace_path)
@@ -216,6 +216,8 @@ class WeintekCsvTraceReader:
             date_str = parts[1]
             clock_str = parts[2]
             ts = self._parse_clock_time(date_str, clock_str)
+            if ts is None:
+                continue  # 时间解析失败的样本不能伪装为t=0的有效Trace
             for si, ci in enumerate(sig_indices):
                 if ci < len(parts):
                     try:
