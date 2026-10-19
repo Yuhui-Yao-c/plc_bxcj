@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bxcj-demo"
+version = "10.34.0"
+description = "PLC 步序采集通用 Demo — 从原始 PLC 源码自动恢复工序步序并生成工程动作采集表"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Proprietary"}
+authors = [
+    {name = "Engineering Team"},
+]
+
+dependencies = [
+    "openpyxl>=3.1.0",
+    "pyyaml>=6.0",
+    "xlrd>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+]
+
+[tool.setuptools]
+packages = ["dlib", "vendor"]
+
+[tool.setuptools.package-dir]
+dlib = "dlib"
+vendor = "vendor"

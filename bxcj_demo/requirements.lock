@@ -1,0 +1,17 @@
+# bxcj_demo 运行依赖锁定
+# Python >= 3.10
+
+# 核心依赖
+openpyxl==3.1.5
+pyyaml==6.0.2
+xlrd==2.0.1
+
+# 间接依赖（openpyxl 需要）
+et-xmlfile==1.1.0
+
+# 注：vendor/lib 中的模块可能还依赖标准库：
+# - xml.etree.ElementTree (XML 解析)
+# - json, re, collections, dataclasses, pathlib
+# - csv (CSV 读取)
+# - datetime (时间解析)
+# 这些都是 Python 标准库，无需额外安装。

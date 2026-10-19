@@ -1,0 +1,49 @@
+# 包 Mylar 项目 Demo 配置
+# v10.36: 修复 SMC2 状态机解析，需重新解码/切片
+
+project:
+  name: mylar
+  display_name: 包Mylar
+  project_workdir: plc_bxcj/projects/包mylar
+  plc_source: L5A0411_2.smc2
+  trace_file: 步序采集资料/包mylar/trace
+  manual_table: 步序采集资料/包mylar/data/步序时长采集-XM2-L5-包mylar-20260913.xlsx
+  source_format: smc2
+
+extract_config:
+  reuse_existing: false
+  state_variables:
+    - name: m_nNextAutoStep
+    - name: m_nNextAutoStep_up
+    - name: m_nNextAutoStep_load_Up
+    - name: m_nNextPowerUpStep
+  step_var_name: m_nNextAutoStep
+  step_var_extract_pattern: '(\w+)\[(\d+)\]'
+  eq_block_type: EQ
+  source_decoder: SMC2Decoder
+  strategies:
+    - graph_comparison
+    - st_code
+    - comment_only
+
+# Mylar SMC2 interface_spec 自动生成
+interface_spec:
+  auto_generate: true
+
+pipeline:
+  reuse_intermediates: false  # v10.36: 必须重新解码+切片
+  rerun_stages:
+    - build_evidence
+    - build_step_graph
+    - build_event_graph
+    - end_tag_selector
+    - transition_filter
+    - trace_pipeline
+    - demo_exporter
+  trace:
+    enabled: true
+  comparison:
+    enabled: true
+
+output:
+  dir: bxcj_demo/output/mylar

@@ -1,0 +1,35 @@
+# 转接片项目 Demo 配置
+# 复用 plc_bxcj/projects/转接片_raw/ 的现有中间产物，仅运行新增的增量层
+
+project:
+  name: transfer
+  display_name: 转接片
+  project_workdir: plc_bxcj/projects/转接片_raw
+  plc_source: JMLEDQA10_CATL_步序时序_转接片_20260504-tiaos-xml.xml
+  trace_file: 步序采集资料/转接片/trace/ZJPJIANKONG0906.trace
+  manual_table: 步序采集资料/转接片/data/4.厦门2转接片 22PPM转接片焊接机步序采集表-20260905步序拆解(已自动还原).xls
+  source_format: plcopen_xml
+
+# extract_config.json 已存在于 project_workdir/output/，沿用不重写
+extract_config:
+  reuse_existing: true
+
+# interface_spec：转接片用 DEFAULT_INTERFACE_SPEC (.In./.Out.) 即可
+interface_spec: null
+
+pipeline:
+  # 复用现有中间产物，跳过重型解码/切片步骤
+  reuse_intermediates: true
+  # 仍需重跑的阶段
+  rerun_stages:
+    - end_tag_selector
+    - transition_filter
+    - trace_pipeline
+    - demo_exporter
+  trace:
+    enabled: true  # 转接片有 CODESYS XML trace
+  comparison:
+    enabled: true
+
+output:
+  dir: bxcj_demo/output/transfer

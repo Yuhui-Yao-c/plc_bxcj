@@ -1,0 +1,66 @@
+# 超声项目 Demo 配置
+# 使用新的 L7A 原始 XML，需重新解码/切片
+
+project:
+  name: ultrasound
+  display_name: 超声
+  # 新建工作目录用于 L7A 源码
+  project_workdir: plc_bxcj/projects/超声_L7A
+  plc_source: XM22PPM_L7A_20260815.xml
+  # 旧 L8A trace（版本不匹配，仅作参考，标黄）
+  trace_file: plc_bxcj/projects/超声/source/超声波L8A_20261009.1555.trace
+  manual_table: 步序采集资料/超声/步序时长采集-XM2-L5-超声波-20260910.xls
+  source_format: plcopen_xml
+
+extract_config:
+  reuse_existing: false
+  state_variables:
+    - name: AutoStep
+      pattern: "{station}.AutoStep[{thread}]"
+      scope: auto-run sequences
+      thread_source: array_index
+      station_source: variable_prefix
+  step_mechanism: array_lookup_state_machine
+  source_decoder: plcopen_xml
+  split_dir: MySplitProject/Actions
+  discovery_strategies:
+    - name: st_code
+      block_type: EXECUTE
+    - name: graph_comparison
+      block_type: EQ
+  primitive_params:
+    eq_block_type: EQ
+    st_code_block_type: EXECUTE
+    comment_step_pattern: "^(\\d+)"
+    step_var_regex: "(\\w+)\\.?(AutoStep)\\[(\\d+)\\]"
+    station_extract_pattern: "(\\w+)\\.?AutoStep"
+  state_domains:
+    - domain_id: production_run
+      state_variables: ["AutoStep"]
+      include_in_primary_export: true
+
+# 超声 ST 代码用 AbsEx/PosOK/InitPos/LimitPos 接口约定
+# 沿用 DEFAULT_INTERFACE_SPEC 已覆盖该模式
+interface_spec: null
+
+pipeline:
+  reuse_intermediates: false
+  rerun_stages:
+    - build_evidence
+    - build_step_graph
+    - build_event_graph
+    - describe_steps
+    - timing_boundary
+    - end_tag_selector
+    - transition_filter
+    - trace_pipeline
+    - demo_exporter
+  trace:
+    enabled: true
+    # 警告：trace 是 L8A，源码是 L7A，版本不匹配，配对成功的行仍标黄
+    version_warning: true
+  comparison:
+    enabled: true
+
+output:
+  dir: bxcj_demo/output/ultrasound
