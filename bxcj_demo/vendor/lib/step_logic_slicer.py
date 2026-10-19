@@ -187,8 +187,11 @@ class StepLogicSlicer:
             if single:
                 self.state_var_names = [single]
 
+        # Match a complete state-variable family, not a prefix of a longer
+        # family (e.g. m_nNextAutoStep vs m_nNextAutoStep_load_Up).
         self.state_var_re = re.compile(
-            '|'.join(re.escape(v) for v in self.state_var_names)) if self.state_var_names else None
+            r'(?<![\\w])(?:' + '|'.join(re.escape(v) for v in self.state_var_names)
+            + r')(?=\\[\\d+\\])') if self.state_var_names else None
 
         self.step_var_extract_re = re.compile(
             config.get('step_var_extract_pattern',
@@ -246,12 +249,8 @@ class StepLogicSlicer:
             unit_name = anchor.get('unit_name', '')
             unit = unit_lookup.get((source_file, unit_name))
 
-            if unit is None:
-                # Fallback: try matching by unit_name only
-                for (sf, un), u in unit_lookup.items():
-                    if un == unit_name:
-                        unit = u
-                        break
+            # Do not substitute a same-named unit from another source file.
+            # That turns a missing anchor into a silent cross-project mismatch.
 
             if unit is None:
                 slices.append(StepLogicSlice(
@@ -1128,7 +1127,9 @@ def find_step_anchors(decoded_programs: list, config: dict) -> list:
         return []
 
     eq_operator = config.get('eq_block_type', 'EQ')
-    step_var_re = re.compile('|'.join(re.escape(v) for v in state_var_names))
+    step_var_re = re.compile(
+        r'(?<![\\w])(?:' + '|'.join(re.escape(v) for v in state_var_names)
+        + r')(?=\\[\\d+\\])')
 
     step_var_extract_re = re.compile(
         config.get('step_var_extract_pattern',
