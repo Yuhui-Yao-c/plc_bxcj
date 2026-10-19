@@ -131,7 +131,7 @@ def discover_steps_from_canonical(decoded_programs: list, config: dict) -> list:
     # Built from state variable names
     sv_pat = '|'.join(re.escape(v) for v in step_var_names)
 
-    step_var_re = re.compile(r'(?<![\\w])(?:' + sv_pat + r')(?=\\[\\d+\\])')
+    step_var_re = re.compile(r'(?<![\w])(?:' + sv_pat + r')(?=\[\d+\])')
     all_candidates = []
 
     for dp in decoded_programs:
@@ -476,7 +476,7 @@ def _discover_unit_steps(elements: list, step_var_names: list,
     """Discover step candidates in a single ProgramUnit."""
     steps = []
     file_thread_steps = defaultdict(set)
-    step_var_re = re.compile(r'(?<![\\w])(?:' + '|'.join(re.escape(v) for v in step_var_names) + r')(?=\\[\\d+\\])')
+    step_var_re = re.compile(r'(?<![\w])(?:' + '|'.join(re.escape(v) for v in step_var_names) + r')(?=\[\d+\])')
 
     if 'graph_comparison' in strategies:
         for elem in elements:
