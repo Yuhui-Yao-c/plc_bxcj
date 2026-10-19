@@ -39,6 +39,9 @@ def detect_format(project_dir: Path) -> str:
     """Detect source format from source directory."""
     source_dir = project_dir / 'source'
     if source_dir.exists():
+        # SMC2 is XML-in-CDATA but its conventional extension is .smc2.
+        if any(source_dir.glob('*.smc2')):
+            return 'smc2'
         for f in source_dir.glob('*.xml'):
             try:
                 with open(f, 'r', encoding='utf-8', errors='ignore') as fh:
