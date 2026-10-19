@@ -425,12 +425,15 @@ def steps_raw_to_step_graph(steps_raw: list, config: dict = None) -> StepGraph:
         )
 
         # Convert transitions with edge deduplication
-        # Group by (target_thread, target_value) and merge evidence
-        edge_map = {}  # (target_thread, target_value) → Transition
+        # Include the written target state-variable family in edge identity.
+        # The source state family is not necessarily the target (cross-thread
+        # or cross-state-machine synchronization is common in Mylar).
+        edge_map = {}  # (target_state_variable, target_thread, target_value) → Transition
         for t_info in s.get('transitions', []):
             target_thread = t_info.get('target_thread', -1)
             target_value = t_info.get('target_value', 0)
-            edge_key = (target_thread, target_value)
+            target_state_variable = t_info.get('target_state_variable') or sv
+            edge_key = (target_state_variable, target_thread, target_value)
 
             if edge_key in edge_map:
                 # Merge evidence into existing transition
@@ -443,7 +446,7 @@ def steps_raw_to_step_graph(steps_raw: list, config: dict = None) -> StepGraph:
                     })
             else:
                 target = StepIdentity(
-                    state_variable=sv,
+                    state_variable=target_state_variable,
                     station=station,
                     thread_idx=target_thread,
                     step_value=target_value,

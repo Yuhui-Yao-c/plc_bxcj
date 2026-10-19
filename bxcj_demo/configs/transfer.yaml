@@ -18,8 +18,8 @@ extract_config:
 interface_spec: null
 
 pipeline:
-  # 复用现有中间产物，跳过重型解码/切片步骤
-  reuse_intermediates: true
+  # 网络级ElementIdentity和StepFact契约已改变，本版本必须重建上游事实
+  reuse_intermediates: false
   # 仍需重跑的阶段
   rerun_stages:
     - end_tag_selector

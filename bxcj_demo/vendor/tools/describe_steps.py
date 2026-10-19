@@ -201,13 +201,41 @@ def check_hmi_reachable(store, fact, resolver=None):
     return {'reachable': False, 'level': 'unreachable', 'path': []}
 
 
-def build_description_from_fact(fact, comment, station_name):
+def describe_verified_fb_call(calls: list) -> str:
+    """Conservative, vendor-independent call fallback with explicit parameters.
+
+    Only describe the operation implied by a recognized FB name. A call alone
+    does not prove a requested command has executed or its feedback is true.
+    """
+    for call in calls or []:
+        if not isinstance(call, dict):
+            continue
+        callee = str(call.get('name') or call.get('callee') or '').strip()
+        params = {}
+        for inp in call.get('inputs', []):
+            if isinstance(inp, dict) and inp.get('name'):
+                params[str(inp['name']).lower()] = str(inp.get('value', '')).strip()
+        if callee.lower() in ('axismove', 'movelinear'):
+            axis = params.get('_axis') or params.get('axis')
+            target = params.get('_position') or params.get('position')
+            if axis and target:
+                return f'{axis} 运动至目标位置参数{target}'
+            if axis:
+                return f'{axis} 执行{callee}运动'
+    return ''
+
+
+def build_description_from_fact(fact, comment, station_name, calls=None):
     """Build description from ActionSemanticFact + Comment + Context."""
     clean_comm = clean_comment(comment)
     if clean_comm:
         if station_name:
             return '{}: {}'.format(station_name, clean_comm), 'plc_comment'
         return clean_comm, 'plc_comment'
+
+    fb_desc = describe_verified_fb_call(calls or [])
+    if fb_desc:
+        return ((station_name + ': ') if station_name else '') + fb_desc, 'fb_call'
 
     parts = []
     if station_name:
@@ -347,7 +375,7 @@ def main():
                 break
 
         description, desc_source = build_description_from_fact(
-            primary_fact or {}, comment, station_name)
+            primary_fact or {}, comment, station_name, s.get('calls', []))
         desc_source_counter[desc_source] += 1
 
         described.append({

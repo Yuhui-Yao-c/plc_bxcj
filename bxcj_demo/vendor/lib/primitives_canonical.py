@@ -131,7 +131,7 @@ def discover_steps_from_canonical(decoded_programs: list, config: dict) -> list:
     # Built from state variable names
     sv_pat = '|'.join(re.escape(v) for v in step_var_names)
 
-    step_var_re = re.compile(sv_pat)
+    step_var_re = re.compile(r'(?<![\w])(?:' + sv_pat + r')(?=\[\d+\])')
     all_candidates = []
 
     for dp in decoded_programs:
@@ -476,7 +476,7 @@ def _discover_unit_steps(elements: list, step_var_names: list,
     """Discover step candidates in a single ProgramUnit."""
     steps = []
     file_thread_steps = defaultdict(set)
-    step_var_re = re.compile('|'.join(re.escape(v) for v in step_var_names))
+    step_var_re = re.compile(r'(?<![\w])(?:' + '|'.join(re.escape(v) for v in step_var_names) + r')(?=\[\d+\])')
 
     if 'graph_comparison' in strategies:
         for elem in elements:
@@ -515,6 +515,7 @@ def _discover_unit_steps(elements: list, step_var_names: list,
                     else:
                         sv_m2 = re.search(r'(\w+)\[(\d+)\]', step_var_input)
                         ext_station = file_station
+                        ext_var = sv_m2.group(1) if sv_m2 else ''
                         ext_thread = int(sv_m2.group(2)) if sv_m2 else -1
                     file_thread_steps[ext_thread].add(val)
                     if val > 0:
@@ -522,7 +523,7 @@ def _discover_unit_steps(elements: list, step_var_names: list,
                             'thread_idx': ext_thread,
                             'value': val,
                             'station': ext_station or file_station,
-                            'state_variable': step_var_names[0] if step_var_names else '',
+                            'state_variable': ext_var,
                             'source_type': 'graph_comparison',
                             'evidence': {'expr': f'{step_var_input}={val}'},
                         })

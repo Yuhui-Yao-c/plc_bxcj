@@ -91,8 +91,7 @@ def ensure_project_layout(workdir: Path, plc_source: str, source_format: str,
             plc_src_path = c
             break
     if plc_src_path is None:
-        log(f'  PLC 源码未找到: {plc_source}（已尝试 {len(candidates)} 个位置）', 'WARN')
-        return source_dir, output_dir
+        raise FileNotFoundError(f'PLC 源码未找到: {plc_source}（已尝试 {len(candidates)} 个位置）')
 
     dst = source_dir / plc_src_path.name
     if not dst.exists() and dst.resolve() != plc_src_path.resolve():
@@ -169,7 +168,7 @@ def stage_build_evidence(workdir: Path, cfg: dict, fresh: bool) -> bool:
     if target.exists() and not fresh and cfg['pipeline'].get('reuse_intermediates', False):
         log(f'  复用 evidence_store.json')
         return True
-    cmd = ['python', 'tools/build_evidence.py', str(workdir)]
+    cmd = [sys.executable, 'tools/build_evidence.py', str(workdir)]
     return run_subprocess(cmd, cwd=str(VENDOR_ROOT))
 
 
@@ -179,7 +178,7 @@ def stage_build_step_graph(workdir: Path, cfg: dict, fresh: bool) -> bool:
     if target.exists() and not fresh and cfg['pipeline'].get('reuse_intermediates', False):
         log(f'  复用 step_logic_slices.json')
         return True
-    cmd = ['python', 'tools/build_step_graph.py', str(workdir)]
+    cmd = [sys.executable, 'tools/build_step_graph.py', str(workdir)]
     return run_subprocess(cmd, cwd=str(VENDOR_ROOT), timeout=1800)
 
 
@@ -191,7 +190,7 @@ def stage_build_event_graph(workdir: Path, cfg: dict, fresh: bool,
        cfg['pipeline'].get('reuse_intermediates', False):
         log(f'  复用 event_graph.json')
         return True
-    cmd = ['python', 'tools/build_event_graph.py', str(workdir)]
+    cmd = [sys.executable, 'tools/build_event_graph.py', str(workdir)]
     return run_subprocess(cmd, cwd=str(VENDOR_ROOT), timeout=600)
 
 
@@ -201,7 +200,7 @@ def stage_describe_steps(workdir: Path, cfg: dict, fresh: bool) -> bool:
     if target.exists() and not fresh and cfg['pipeline'].get('reuse_intermediates', False):
         log(f'  复用 steps_described.json')
         return True
-    cmd = ['python', 'tools/describe_steps.py', str(workdir)]
+    cmd = [sys.executable, 'tools/describe_steps.py', str(workdir)]
     return run_subprocess(cmd, cwd=str(VENDOR_ROOT), timeout=600)
 
 
@@ -670,6 +669,16 @@ def stage_comparison(workdir: Path, output_dir: Path, cfg: dict) -> bool:
 
 # ============== 主流程 ==============
 
+def stage_generate_interface_spec(workdir: Path, cfg: dict) -> bool:
+    """Generate project interface hints only after source slices exist."""
+    spec = cfg.get('interface_spec')
+    if not spec or not spec.get('auto_generate'):
+        return True
+    log('  从真实StepLogicSlices提取Mylar interface_spec')
+    from dlib.mylar_interface_analyzer import MylarInterfaceAnalyzer
+    return MylarInterfaceAnalyzer(workdir / 'output', cfg).run()
+
+
 def run_project(config_path: str, fresh: bool = False) -> bool:
     log(f'==== 加载配置: {config_path} ====')
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -700,23 +709,16 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
     # 2. extract_config
     write_extract_config(workdir, workdir / 'output', cfg)
 
-    # 3. Mylar interface_spec 自动生成（如需要）
+    # 3. The interface spec depends on StepLogicSlices. Never execute it
+    # before decoding/build_step_graph in a clean workspace.
     ispec = cfg.get('interface_spec')
-    if ispec and ispec.get('auto_generate'):
-        log('--- Mylar interface_spec 自动生成 ---')
-        from dlib.mylar_interface_analyzer import MylarInterfaceAnalyzer
-        analyzer = MylarInterfaceAnalyzer(workdir / 'output', cfg)
-        if not analyzer.run():
-            log('  interface_spec 生成失败', 'ERROR')
-            return False
-
-    # 4. 重跑 event_graph（interface_spec 改变时）
     force_eg = bool(ispec and ispec.get('auto_generate'))
 
-    # 5. 主 pipeline
+    # 4. 主 pipeline
     stages = [
         ('build_evidence', lambda: stage_build_evidence(workdir, cfg, fresh)),
         ('build_step_graph', lambda: stage_build_step_graph(workdir, cfg, fresh)),
+        ('generate_interface_spec', lambda: stage_generate_interface_spec(workdir, cfg)),
         ('build_event_graph', lambda: stage_build_event_graph(workdir, cfg, fresh, force_rerun=force_eg)),
         ('describe_steps', lambda: stage_describe_steps(workdir, cfg, fresh)),
         ('timing_boundary', lambda: stage_timing_boundary(workdir, cfg, fresh)),
@@ -737,15 +739,16 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
 
     for name, fn in stages:
         # 决定是否执行此阶段
-        should_run = fresh or name in rerun or name in ('end_tag_selector', 'transition_filter',
-                                                          'trace_pipeline', 'demo_exporter',
-                                                          'comparison',
-                                                          # v10.39 新增 stage 默认执行
-                                                          'smc2_fb_recognizer',
-                                                          'ultrasound_interface_analyzer',
-                                                          'build_process_model',
-                                                          'build_action_span',
-                                                          'select_timing_intent')
+        core_stages = ('build_evidence', 'build_step_graph',
+                       'build_event_graph', 'describe_steps', 'timing_boundary')
+        always_stages = ('generate_interface_spec', 'end_tag_selector', 'transition_filter',
+                         'trace_pipeline', 'demo_exporter', 'comparison',
+                         'smc2_fb_recognizer', 'ultrasound_interface_analyzer',
+                         'build_process_model', 'build_action_span',
+                         'select_timing_intent')
+        reuse = pipeline.get('reuse_intermediates', False)
+        should_run = (fresh or name in rerun or name in always_stages
+                      or (name in core_stages and not reuse))
         # comparison 默认执行（除非显式禁用）
         if name == 'comparison':
             comp_cfg = pipeline.get('comparison', {})
@@ -753,11 +756,17 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
                 should_run = False
             else:
                 should_run = True
-        # 复用模式下，前 5 个阶段可以复用
-        if not fresh and pipeline.get('reuse_intermediates', False) and \
-           name in ('build_evidence', 'build_step_graph', 'build_event_graph',
-                    'describe_steps', 'timing_boundary') and name not in rerun:
-            should_run = False
+        # Reuse only when the required output really exists. Earlier code
+        # skipped all foundational stages even when the cache was missing.
+        if not fresh and reuse and name in core_stages and name not in rerun:
+            expected = {
+                'build_evidence': 'evidence_store.json',
+                'build_step_graph': 'step_logic_slices.json',
+                'build_event_graph': 'event_graph.json',
+                'describe_steps': 'steps_described.json',
+                'timing_boundary': 'timing_boundaries.json',
+            }[name]
+            should_run = not (workdir / 'output' / expected).exists()
 
         if not should_run:
             log(f'--- 跳过 {name} ---')
@@ -768,10 +777,12 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
             ok = fn()
             if not ok:
                 log(f'阶段 {name} 失败', 'ERROR')
-                # 不中断，尽量保留已成功结果
+                # 失败后不可继续使用陈旧产物伪装成成功
+                return False
         except Exception as e:
             log(f'阶段 {name} 异常: {e}', 'ERROR')
             traceback.print_exc()
+            return False
 
     log(f'==== 项目 {proj["name"]} 完成 ====')
     log(f'输出目录: {output_dir}')
@@ -919,7 +930,8 @@ def main():
         with open(cfg_path, 'w', encoding='utf-8') as f:
             yaml.dump(cfg, f, allow_unicode=True)
         log(f'动态生成配置: {cfg_path}')
-        run_project(str(cfg_path), fresh=args.fresh)
+        if not run_project(str(cfg_path), fresh=args.fresh):
+            sys.exit(1)
         return
 
     if args.all:
@@ -946,11 +958,14 @@ def main():
         log('\n==== 总结 ====')
         for c, ok in results.items():
             log(f'  {c}: {"OK" if ok else "FAIL"}')
+        if not all(results.values()):
+            sys.exit(1)
     elif args.config:
         cfg_path = Path(args.config)
         if not cfg_path.is_absolute():
             cfg_path = REPO_ROOT / args.config
-        run_project(str(cfg_path), fresh=args.fresh)
+        if not run_project(str(cfg_path), fresh=args.fresh):
+            sys.exit(1)
     else:
         parser.print_help()
         sys.exit(1)
