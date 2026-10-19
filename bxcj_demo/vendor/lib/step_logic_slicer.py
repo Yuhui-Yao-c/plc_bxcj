@@ -349,33 +349,28 @@ class StepLogicSlicer:
         comment = ''
         step_val_str = str(anchor.get('step_value', ''))
         anchor_sv = anchor.get('state_variable', '')
-        # First: try to find a comment whose text starts with the step value
-        # AND is in the same network as the anchor (most reliable)
-        for elem in unit.elements:
-            if isinstance(elem, Comment) and elem.text:
-                text = elem.text.strip()
-                if re.match(r'^' + re.escape(step_val_str) + r'[：:\.\s]', text):
-                    # Prefer comment from the same network as anchor
-                    if elem.network_id == anchor_nid:
-                        comment = text
-                        break
-                    # If not same network, only accept if no better match found yet
-                    if not comment:
-                        comment = text
-        # Second: fall back to network_id match (any text)
-        if not comment:
-            for elem in unit.elements:
-                if isinstance(elem, Comment) and elem.network_id == anchor_nid and elem.text:
-                    comment = elem.text
+        # Never borrow another network's similarly numbered comment. A
+        # Step EQ can be referenced as an interlock in a different process.
+        if anchor_nid:
+            same_network_comments = [
+                e for e in unit.elements
+                if isinstance(e, Comment) and e.text and e.network_id == anchor_nid
+            ]
+            for elem in same_network_comments:
+                candidate = elem.text.strip()
+                if re.match(r'^' + re.escape(step_val_str) + r'[：:\\.\\s-]', candidate):
+                    comment = candidate
                     break
-        # Third: for PLCopen FBD (no network_id), try to find a non-trivial comment
-        # (not "网络注释") that mentions the step value
-        if not comment and not anchor_nid:
+            if not comment and len(same_network_comments) == 1:
+                comment = same_network_comments[0].text.strip()
+        else:
+            # PLCopen sometimes has no network identity; do not match only
+            # by an arbitrary occurrence of the numeric Step value.
             for elem in unit.elements:
                 if isinstance(elem, Comment) and elem.text:
-                    text = elem.text.strip()
-                    if text and text != '网络注释' and step_val_str in text:
-                        comment = text
+                    candidate = elem.text.strip()
+                    if re.match(r'^' + re.escape(step_val_str) + r'[：:\\.\\s-]', candidate):
+                        comment = candidate
                         break
 
         # Build anchor condition dict
@@ -873,7 +868,11 @@ class StepLogicSlicer:
 
                         t_fact = LogicFact(
                             fact_type='transition',
-                            target_step={'thread': target_thread, 'value': target_value},
+                            target_step={
+                                'thread': target_thread, 'value': target_value,
+                                'state_variable': target_name.split('[')[0].rsplit('.', 1)[-1],
+                                'target_expression': target_name,
+                            },
                             boolean_expr=bool_expr_to_dict(bool_expr),
                             element_id=r['element_id'],
                             network_id=getattr(elem, 'network_id', ''),
