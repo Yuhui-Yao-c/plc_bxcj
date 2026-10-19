@@ -736,15 +736,16 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
 
     for name, fn in stages:
         # 决定是否执行此阶段
-        should_run = fresh or name in rerun or name in ('end_tag_selector', 'transition_filter',
-                                                          'trace_pipeline', 'demo_exporter',
-                                                          'comparison',
-                                                          # v10.39 新增 stage 默认执行
-                                                          'smc2_fb_recognizer',
-                                                          'ultrasound_interface_analyzer',
-                                                          'build_process_model',
-                                                          'build_action_span',
-                                                          'select_timing_intent')
+        core_stages = ('build_evidence', 'build_step_graph',
+                       'build_event_graph', 'describe_steps', 'timing_boundary')
+        always_stages = ('end_tag_selector', 'transition_filter',
+                         'trace_pipeline', 'demo_exporter', 'comparison',
+                         'smc2_fb_recognizer', 'ultrasound_interface_analyzer',
+                         'build_process_model', 'build_action_span',
+                         'select_timing_intent')
+        reuse = pipeline.get('reuse_intermediates', False)
+        should_run = (fresh or name in rerun or name in always_stages
+                      or (name in core_stages and not reuse))
         # comparison 默认执行（除非显式禁用）
         if name == 'comparison':
             comp_cfg = pipeline.get('comparison', {})
@@ -752,11 +753,17 @@ def run_project(config_path: str, fresh: bool = False) -> bool:
                 should_run = False
             else:
                 should_run = True
-        # 复用模式下，前 5 个阶段可以复用
-        if not fresh and pipeline.get('reuse_intermediates', False) and \
-           name in ('build_evidence', 'build_step_graph', 'build_event_graph',
-                    'describe_steps', 'timing_boundary') and name not in rerun:
-            should_run = False
+        # Reuse only when the required output really exists. Earlier code
+        # skipped all foundational stages even when the cache was missing.
+        if not fresh and reuse and name in core_stages and name not in rerun:
+            expected = {
+                'build_evidence': 'evidence_store.json',
+                'build_step_graph': 'step_logic_slices.json',
+                'build_event_graph': 'event_graph.json',
+                'describe_steps': 'steps_described.json',
+                'timing_boundary': 'timing_boundaries.json',
+            }[name]
+            should_run = not (workdir / 'output' / expected).exists()
 
         if not should_run:
             log(f'--- 跳过 {name} ---')
