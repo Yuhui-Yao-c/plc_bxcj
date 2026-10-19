@@ -101,5 +101,45 @@ class CsvTimestampTests(unittest.TestCase):
         self.assertIsNone(reader._parse_clock_time("bad", "clock"))
 
 
+class PipelineAndSemanticTests(unittest.TestCase):
+    @staticmethod
+    def load_script(relative_path, module_name):
+        spec = importlib.util.spec_from_file_location(module_name, ROOT / relative_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_axis_fb_fallback_keeps_actual_source_parameters(self):
+        describe = self.load_script("vendor/tools/describe_steps.py", "describe_test")
+        calls = [{"name": "AxisMove", "inputs": [
+            {"name": "_Axis", "value": "Axis009Program"},
+            {"name": "_Position", "value": "3"}
+        ]}]
+        description, source = describe.build_description_from_fact({}, "", "", calls)
+        self.assertEqual(source, "fb_call")
+        self.assertIn("Axis009Program", description)
+        self.assertIn("3", description)
+        self.assertNotIn("气缸", description)
+
+    def test_failed_pipeline_stage_returns_failure(self):
+        runner = self.load_script("run.py", "demo_runner_test")
+        with tempfile.TemporaryDirectory() as d:
+            project_dir = Path(d)
+            cfg_path = project_dir / "minimal.yaml"
+            cfg_path.write_text(
+                "project:\n  name: test\n  display_name: Test\n"
+                f"  project_workdir: '{str(project_dir)}'\n"
+                "  plc_source: unused.xml\n  source_format: plcopen_xml\n"
+                "pipeline:\n  reuse_intermediates: false\n"
+                "  rerun_stages: [build_evidence]\n"
+                f"output:\n  dir: '{str(project_dir / 'out')}'\n",
+                encoding="utf-8"
+            )
+            with patch.object(runner, "ensure_project_layout"), \
+                 patch.object(runner, "write_extract_config"), \
+                 patch.object(runner, "stage_build_evidence", return_value=False):
+                self.assertFalse(runner.run_project(str(cfg_path), fresh=False))
+
+
 if __name__ == "__main__":
     unittest.main()
