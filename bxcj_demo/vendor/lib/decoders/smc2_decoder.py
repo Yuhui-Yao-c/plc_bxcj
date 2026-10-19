@@ -431,7 +431,9 @@ class SMC2Decoder:
         """
         ix = cl.get('Ix')
         if ix is not None:
-            return str(ix)
+            # Ix is only unique inside a rung. The global lookup and DefUse
+            # engine require a unique element ID across this ProgramUnit.
+            return f'{network_id}/Ix/{ix}'
         cl_type = cl.get('__type', 'unk')
         return f'{network_id}/{raw_order}/{cl_type}'
 
@@ -754,9 +756,15 @@ class SMC2Decoder:
         # Build element_id set for validity checking
         eid_set = {eid for _, _, eid, _, _ in positioned}
 
-        # Power rail connections — LRI/RRI may reference Ix values
+        # Power rail connections — LRI/RRI refer to raw Ix, not our
+        # network-qualified canonical element ID.
+        raw_ix_to_eid = {
+            str(cl['Ix']): id_map[order]
+            for order, cl in enumerate(cls_list)
+            if isinstance(cl, dict) and cl.get('Ix') is not None and order in id_map
+        }
         if lri is not None:
-            lri_eid = str(lri)
+            lri_eid = raw_ix_to_eid.get(str(lri), str(lri))
             if lri_eid in eid_set:
                 connections.append(ProgramConnection(
                     source_element_id=f'LRI:{network_id}',
@@ -767,7 +775,7 @@ class SMC2Decoder:
                         file=file_name, element_tag='LRI'),
                 ))
         if rri is not None:
-            rri_eid = str(rri)
+            rri_eid = raw_ix_to_eid.get(str(rri), str(rri))
             if rri_eid in eid_set:
                 connections.append(ProgramConnection(
                     source_element_id=rri_eid,
