@@ -190,8 +190,8 @@ class StepLogicSlicer:
         # Match a complete state-variable family, not a prefix of a longer
         # family (e.g. m_nNextAutoStep vs m_nNextAutoStep_load_Up).
         self.state_var_re = re.compile(
-            r'(?<![\\w])(?:' + '|'.join(re.escape(v) for v in self.state_var_names)
-            + r')(?=\\[\\d+\\])') if self.state_var_names else None
+            r'(?<![\w])(?:' + '|'.join(re.escape(v) for v in self.state_var_names)
+            + r')(?=\[\d+\])') if self.state_var_names else None
 
         self.step_var_extract_re = re.compile(
             config.get('step_var_extract_pattern',
@@ -1128,8 +1128,8 @@ def find_step_anchors(decoded_programs: list, config: dict) -> list:
 
     eq_operator = config.get('eq_block_type', 'EQ')
     step_var_re = re.compile(
-        r'(?<![\\w])(?:' + '|'.join(re.escape(v) for v in state_var_names)
-        + r')(?=\\[\\d+\\])')
+        r'(?<![\w])(?:' + '|'.join(re.escape(v) for v in state_var_names)
+        + r')(?=\[\d+\])')
 
     step_var_extract_re = re.compile(
         config.get('step_var_extract_pattern',
